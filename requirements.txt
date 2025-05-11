@@ -1,0 +1,6 @@
+customtkinter
+tkinterdnd2
+requests
+urllib3
+Pillow
+beautifulsoup4
