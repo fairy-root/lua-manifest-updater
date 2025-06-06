@@ -22,95 +22,47 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 APP_NAME = "Lua Manifest Updater"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 WINDOW_WIDTH = 550
 WINDOW_HEIGHT = 830
 DEFAULT_OUTPUT_SUBDIR = "Updated Files"
 TELEGRAM_LINK = "https://t.me/FairyRoot"
 
 
-def _get_depot_manifest_ids_from_steamui(game_id, status_callback):
-    """Fetches depot_id and manifest_gid pairs from steamui.com for a given game_id."""
-    status_callback(
-        f"Special Mode: Fetching manifest list for Game ID {game_id}...", "yellow"
-    )
-    url = f"https://steamui.com/get_appinfo.php?appid={game_id}"
-    reponse_text = None
-    depotid_manifestid_list = []
-
-    try:
-        reponse = requests.get(url, timeout=15)
-        reponse.raise_for_status()
-        reponse_text = reponse.text
-    except requests.exceptions.Timeout:
-        status_callback(
-            f"Special Mode Error: Request timed out for game ID {game_id}.", "red"
-        )
-        return []
-    except requests.exceptions.HTTPError as http_err:
-        status_callback(
-            f"Special Mode Error: HTTP error for game ID {game_id}: {http_err}", "red"
-        )
-        return []
-    except requests.exceptions.RequestException as req_err:
-        status_callback(
-            f"Special Mode Error: Request error for game ID {game_id}: {req_err}", "red"
-        )
-        return []
-
-    if not reponse_text or not reponse_text.strip():
-        status_callback(
-            f"Special Mode Warning: Empty reponse for game ID {game_id}.", "orange"
-        )
-        return []
-
-    pattern_std = r'"(?P<depotid>\d+)"\s*\{\s*"manifests"\s*\{\s*"public"\s*\{\s*"gid"\s*"(?P<manifestgid>\d+)"'
-
-    pattern_dlc = r'"(?P<depotid_dlc>\d+)"\s*\{\s*"dlcappid"\s*"(?P<dlcappid>\d+)"\s*"manifests"\s*\{\s*"public"\s*\{\s*"gid"\s*"(?P<manifestgid_dlc>\d+)"'
-
-    matches_std = re.finditer(pattern_std, reponse_text)
-    for match in matches_std:
-        depotid = match.group("depotid")
-        manifestgid = match.group("manifestgid")
-        depotid_manifestid_list.append((depotid, manifestgid))
-
-    matches_dlc = re.finditer(pattern_dlc, reponse_text)
-    for match in matches_dlc:
-        depotid = match.group("depotid_dlc")
-        manifestgid = match.group("manifestgid_dlc")
-        depotid_manifestid_list.append((depotid, manifestgid))
-
-    if not depotid_manifestid_list:
-        status_callback(
-            f"Special Mode: No depot/manifest IDs found for Game ID {game_id}.",
-            "orange",
-        )
-    else:
-        status_callback(
-            f"Special Mode: Found {len(depotid_manifestid_list)} manifest(s) to download for Game ID {game_id}.",
-            "lightblue",
-        )
-    return depotid_manifestid_list
+APP_BG_COLOR = "#222222"
+MAIN_FRAME_BG_COLOR = "#2E2E2E"
+SECTION_CARD_BG_COLOR = "#383838"
+SECTION_CARD_BORDER_COLOR = "#484848"
+DND_FRAME_FG_COLOR = "#333333"
+DND_FRAME_BORDER_COLOR = "#5D5FEF"
 
 
 def get_game_id_from_content(content):
-    """Extracts game ID from manifest content."""
+    """Extracts game ID from manifest content using regex."""
     match = re.search(r'addappid\s*\(\s*(\d+|"(\d+)")', content)
     if match:
         game_id = match.group(2) if match.group(2) else match.group(1)
         return game_id
-    else:
-        return None
+    return None
 
 
 def download_file(url, filename, status_callback):
-    """Downloads a file, updating status via callback."""
+    """Downloads a file from a URL, updating status via callback.
+
+    Args:
+        url (str): The URL to download from.
+        filename (str): The local path to save the downloaded file.
+        status_callback (function): Callback to report status (message, color).
+
+    Returns:
+        bool: True if download was successful, False otherwise.
+    """
     try:
         status_callback(f"Downloading: {os.path.basename(filename)}...", "orange")
-        reponse = requests.get(url, verify=False, stream=True, timeout=30)
-        reponse.raise_for_status()
+        response = requests.get(url, verify=False, stream=True, timeout=30)
+        response.raise_for_status()
         with open(filename, "wb") as f:
-            for chunk in reponse.iter_content(chunk_size=8192):
+            for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
         status_callback(
@@ -123,15 +75,26 @@ def download_file(url, filename, status_callback):
         )
         return False
     except requests.exceptions.RequestException as e:
-        status_callback(f"Error downloading file: {e}", "red")
+        status_callback(f"Error downloading {os.path.basename(filename)}: {e}", "red")
         return False
     except Exception as e:
-        status_callback(f"Error during download: {e}", "red")
+        status_callback(
+            f"Error during download of {os.path.basename(filename)}: {e}", "red"
+        )
         return False
 
 
 def extract_files_gui(filename, extract_dir, status_callback):
-    """Extracts manifest files, updating status via callback."""
+    """Extracts .manifest files from a zip archive, updating status via callback.
+
+    Args:
+        filename (str): Path to the zip file.
+        extract_dir (str): Directory to extract manifest files into.
+        status_callback (function): Callback to report status.
+
+    Returns:
+        list or None: A list of paths to extracted manifest files, or None on error.
+    """
     try:
         status_callback("Extracting files...", "orange")
         os.makedirs(extract_dir, exist_ok=True)
@@ -169,7 +132,14 @@ def extract_files_gui(filename, extract_dir, status_callback):
 
 
 def delete_item(item_path):
-    """Deletes a file or directory, without status updates."""
+    """Deletes a file or directory recursively, without status updates to GUI.
+
+    Args:
+        item_path (str): Path to the file or directory to delete.
+
+    Returns:
+        bool: True if deletion was successful or item didn't exist, False on error.
+    """
     try:
         if os.path.exists(item_path):
             if os.path.isfile(item_path):
@@ -177,7 +147,7 @@ def delete_item(item_path):
             elif os.path.isdir(item_path):
                 shutil.rmtree(item_path)
             return True
-        return False
+        return True
     except Exception as e:
         print(f"Warn: Error deleting {os.path.basename(item_path)}: {e}")
         return False
@@ -186,7 +156,18 @@ def delete_item(item_path):
 def update_lua_file_gui(
     original_lua_path, extracted_manifest_paths, game_id, temp_dir, status_callback
 ):
-    """Updates the lua file content based on extracted manifest IDs."""
+    """Updates the lua file content with new manifest IDs from extracted files.
+
+    Args:
+        original_lua_path (str): Path to the original Lua file.
+        extracted_manifest_paths (list): List of paths to extracted .manifest files.
+        game_id (str): The game ID.
+        temp_dir (str): Directory to save the temporary updated Lua file.
+        status_callback (function): Callback to report status.
+
+    Returns:
+        str or None: Path to the temporary updated Lua file, or None on error.
+    """
     temp_lua_filename = f"temp_{game_id}_{os.path.basename(original_lua_path)}"
     temp_lua_filepath = os.path.join(temp_dir, temp_lua_filename)
     try:
@@ -247,7 +228,18 @@ def zip_files_gui(
     extracted_manifest_paths,
     status_callback,
 ):
-    """Zips the updated lua and extracted manifests."""
+    """Zips the updated lua file and extracted manifest files.
+
+    Args:
+        output_zip_path (str): Path for the output zip file.
+        updated_lua_path (str): Path to the updated Lua file.
+        game_id (str): The game ID.
+        extracted_manifest_paths (list): List of paths to extracted .manifest files.
+        status_callback (function): Callback to report status.
+
+    Returns:
+        bool: True if zipping was successful, False otherwise.
+    """
     try:
         status_callback(
             f"Creating final zip: {os.path.basename(output_zip_path)}...", "orange"
@@ -259,7 +251,7 @@ def zip_files_gui(
                 zip_ref.write(updated_lua_path, f"{game_id}.lua")
             else:
                 status_callback(
-                    f"Error: Temporary updated Lua file not found for zipping.", "red"
+                    "Error: Temporary updated Lua file not found for zipping.", "red"
                 )
                 return False
 
@@ -269,9 +261,9 @@ def zip_files_gui(
                     zip_ref.write(manifest_path, os.path.basename(manifest_path))
                     manifest_added = True
 
-            if not manifest_added:
+            if not manifest_added and extracted_manifest_paths:
                 status_callback(
-                    "Warning: No extracted .manifest files were added to the zip.",
+                    "Warning: No extracted .manifest files were added to the zip (they might be missing).",
                     "orange",
                 )
 
@@ -285,13 +277,14 @@ def zip_files_gui(
 
 
 class App(TkinterDnD.Tk):
+    """Main application class for Lua Manifest Updater."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.selected_file_path = ctk.StringVar()
         self.repos_config = {}
         self.selected_repo_key = ctk.StringVar()
-        self.special_mode_var = ctk.BooleanVar(value=True)
 
         self._load_repos_config()
 
@@ -312,22 +305,28 @@ class App(TkinterDnD.Tk):
 
         self.title(f"{APP_NAME} v{APP_VERSION}")
         self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        self.configure(bg="#2E2E2E")
+        self.configure(bg=APP_BG_COLOR)
         self.resizable(False, False)
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_frame.pack(pady=20, padx=40, fill="both", expand=True)
+        self.main_frame = ctk.CTkFrame(self, fg_color=MAIN_FRAME_BG_COLOR)
+        self.main_frame.pack(pady=10, padx=10, fill="both", expand=True)
 
-        self.header_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        self.header_frame.pack(pady=(10, 15), fill="x")
+        self.header_frame = ctk.CTkFrame(
+            self.main_frame,
+            fg_color=SECTION_CARD_BG_COLOR,
+            corner_radius=8,
+            border_width=1,
+            border_color=SECTION_CARD_BORDER_COLOR,
+        )
+        self.header_frame.pack(pady=(5, 10), padx=10, fill="x")
 
         try:
             img_path = "imgs/FairyRoot.png"
             original_image = Image.open(img_path).convert("RGBA")
-            size = (100, 100)
+            size = (80, 80)
 
             mask = Image.new("L", size, 0)
             draw = ImageDraw.Draw(mask)
@@ -341,25 +340,36 @@ class App(TkinterDnD.Tk):
             )
 
             self.image_label = ctk.CTkLabel(
-                self.header_frame, text="", image=self.fairyroot_image
+                self.header_frame, text="", image=self.fairyroot_image, cursor="hand2"
             )
-            self.image_label.pack(side="left", padx=(0, 15))
+            self.image_label.pack(side="left", padx=15, pady=10)
+            self.image_label.bind("<Button-1>", lambda e: self.join_telegram())
 
         except FileNotFoundError:
             print(f"Warning: Header image not found at {img_path}")
             self.image_label = ctk.CTkLabel(
-                self.header_frame, text="[IMG]", width=size[0], height=size[1]
+                self.header_frame,
+                text="[IMG]",
+                width=size[0],
+                height=size[1],
+                cursor="hand2",
             )
-            self.image_label.pack(side="left", padx=(0, 15))
+            self.image_label.pack(side="left", padx=15, pady=10)
+            self.image_label.bind("<Button-1>", lambda e: self.join_telegram())
         except Exception as e:
             print(f"Error loading header image: {e}")
             self.image_label = ctk.CTkLabel(
-                self.header_frame, text="[ERR]", width=size[0], height=size[1]
+                self.header_frame,
+                text="[ERR]",
+                width=size[0],
+                height=size[1],
+                cursor="hand2",
             )
-            self.image_label.pack(side="left", padx=(0, 15))
+            self.image_label.pack(side="left", padx=15, pady=10)
+            self.image_label.bind("<Button-1>", lambda e: self.join_telegram())
 
         self.text_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        self.text_frame.pack(side="left", fill="x", expand=True)
+        self.text_frame.pack(side="left", fill="x", expand=True, pady=10, padx=(0, 10))
 
         self.fairyroot_label = ctk.CTkLabel(
             self.text_frame,
@@ -372,7 +382,7 @@ class App(TkinterDnD.Tk):
         self.app_name_label = ctk.CTkLabel(
             self.text_frame,
             text=APP_NAME,
-            font=ctk.CTkFont(size=18),
+            font=ctk.CTkFont(size=16),
             anchor="w",
             text_color="darkgray",
         )
@@ -387,25 +397,34 @@ class App(TkinterDnD.Tk):
         )
         self.version_label.pack(pady=(0, 0), fill="x")
 
-        self.select_prompt_label = ctk.CTkLabel(
+        self.file_repo_frame = ctk.CTkFrame(
             self.main_frame,
-            text="Select a lua file or drag and drop it",
+            fg_color=SECTION_CARD_BG_COLOR,
+            corner_radius=8,
+            border_width=1,
+            border_color=SECTION_CARD_BORDER_COLOR,
+        )
+        self.file_repo_frame.pack(pady=10, padx=10, fill="x")
+
+        self.select_prompt_label = ctk.CTkLabel(
+            self.file_repo_frame,
+            text="Select a .lua file or drag and drop it below",
             text_color="gray",
         )
         self.select_prompt_label.pack(pady=(10, 5))
 
         self.select_file_button = ctk.CTkButton(
-            self.main_frame,
+            self.file_repo_frame,
             text="Select File",
             command=self.select_file,
-            width=200,
-            height=40,
+            width=180,
+            height=35,
             font=ctk.CTkFont(size=14),
         )
         self.select_file_button.pack(pady=5)
 
         self.repo_label = ctk.CTkLabel(
-            self.main_frame, text="Select Repository:", text_color="gray"
+            self.file_repo_frame, text="Select Repository:", text_color="gray"
         )
         self.repo_label.pack(pady=(10, 0))
 
@@ -413,104 +432,99 @@ class App(TkinterDnD.Tk):
             list(self.repos_config.keys()) if self.repos_config else ["N/A"]
         )
         self.repo_dropdown = ctk.CTkOptionMenu(
-            self.main_frame,
+            self.file_repo_frame,
             variable=self.selected_repo_key,
             values=dropdown_values,
             command=self.on_repo_select,
-            width=200,
-            height=40,
+            width=180,
+            height=35,
             font=ctk.CTkFont(size=14),
         )
         if not self.repos_config:
             self.repo_dropdown.set("N/A")
             self.repo_dropdown.configure(state="disabled")
-        elif self.special_mode_var.get():
-            self.repo_dropdown.configure(state="disabled")
+        self.repo_dropdown.pack(pady=(5, 10))
 
-        self.repo_dropdown.pack(pady=5)
-
-        self.special_mode_checkbox = ctk.CTkCheckBox(
+        self.output_action_frame = ctk.CTkFrame(
             self.main_frame,
-            text="Special Mode (Direct Manifest Download)",
-            variable=self.special_mode_var,
-            command=self._on_toggle_special_mode,
-            font=ctk.CTkFont(size=12),
+            fg_color=SECTION_CARD_BG_COLOR,
+            corner_radius=8,
+            border_width=1,
+            border_color=SECTION_CARD_BORDER_COLOR,
         )
-        self.special_mode_checkbox.pack(pady=(5, 10))
+        self.output_action_frame.pack(pady=10, padx=10, fill="x")
 
-        self.output_center_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        self.output_center_frame.pack(pady=(15, 5), fill="x")
-
-        self.output_inner_frame = ctk.CTkFrame(
-            self.output_center_frame, fg_color="transparent"
+        self.output_controls_container = ctk.CTkFrame(
+            self.output_action_frame, fg_color="transparent"
         )
-        self.output_inner_frame.pack(anchor="center")
+        self.output_controls_container.pack(pady=(10, 5), fill="x")
 
         self.output_label = ctk.CTkLabel(
-            self.output_inner_frame,
+            self.output_controls_container,
             text="Output Folder:",
             text_color="gray",
             anchor="w",
         )
-        self.output_label.pack(side="left", padx=(0, 10))
+        self.output_label.pack(side="top", padx=(10, 5), anchor="center")
 
         self.browse_button = ctk.CTkButton(
-            self.output_inner_frame,
+            self.output_controls_container,
             text="Browse",
             command=self.select_output_folder,
             width=100,
             height=30,
         )
-        self.browse_button.pack(side="left")
+        self.browse_button.pack(side="top", anchor="center")
+
+        self.output_controls_container.pack_configure(anchor="center")
 
         self.output_path_label = ctk.CTkLabel(
-            self.main_frame,
+            self.output_action_frame,
             textvariable=self.output_folder_path,
             text_color="green",
-            wraplength=WINDOW_WIDTH - 60,
+            wraplength=WINDOW_WIDTH - 80,
             anchor="center",
             justify="center",
             font=ctk.CTkFont(size=11),
         )
-        self.output_path_label.pack(pady=(0, 15), fill="x")
+        self.output_path_label.pack(pady=(0, 10), fill="x", padx=10)
 
         self.update_button = ctk.CTkButton(
-            self.main_frame,
+            self.output_action_frame,
             text="Update",
             command=self.start_update_process,
-            width=200,
-            height=45,
+            width=180,
+            height=40,
             font=ctk.CTkFont(size=16, weight="bold"),
         )
-        self.update_button.pack(pady=5)
+        self.update_button.pack(pady=(5, 15))
 
-        self.telegram_button = ctk.CTkButton(
+        self.status_display_frame = ctk.CTkFrame(
             self.main_frame,
-            text="Telegram",
-            command=self.join_telegram,
-            width=200,
-            height=45,
-            font=ctk.CTkFont(size=16),
+            fg_color=SECTION_CARD_BG_COLOR,
+            corner_radius=8,
+            border_width=1,
+            border_color=SECTION_CARD_BORDER_COLOR,
         )
-        self.telegram_button.pack(pady=5)
+        self.status_display_frame.pack(pady=10, padx=10, fill="x")
 
         self.status_label = ctk.CTkLabel(
-            self.main_frame,
+            self.status_display_frame,
             textvariable=self.status_message,
-            wraplength=WINDOW_WIDTH - 60,
+            wraplength=WINDOW_WIDTH - 80,
             font=ctk.CTkFont(size=12),
             text_color="lightgreen",
         )
-        self.status_label.pack(pady=(10, 5))
+        self.status_label.pack(pady=8, padx=10, fill="x")
 
         self.dnd_frame = ctk.CTkFrame(
             self.main_frame,
             border_width=2,
-            border_color="#5D5FEF",
-            fg_color="#333333",
+            border_color=DND_FRAME_BORDER_COLOR,
+            fg_color=DND_FRAME_FG_COLOR,
             corner_radius=15,
         )
-        self.dnd_frame.pack(pady=(5, 10), fill="both", expand=True)
+        self.dnd_frame.pack(pady=(5, 10), padx=10, fill="both", expand=True)
         self.dnd_frame.grid_propagate(False)
         self.dnd_frame.grid_rowconfigure(1, weight=1)
         self.dnd_frame.grid_columnconfigure(0, weight=1)
@@ -532,7 +546,9 @@ class App(TkinterDnD.Tk):
         self.dnd_placeholder_label.dnd_bind("<<Drop>>", self.handle_drop)
 
     def _load_repos_config(self):
-        """Loads repository configuration from repo.json."""
+        """Loads repository configuration from repo.json.
+        Sets default repository and updates dropdown options.
+        """
         self.repos_config = {}
         default_repo_path_target = "Fairyvmos/BlankTMing"
         key_to_select_by_default = None
@@ -547,46 +563,61 @@ class App(TkinterDnD.Tk):
                 if key != "default":
                     self.repos_config[key] = value
 
-            for name, path in self.repos_config.items():
-                if path == default_repo_path_target:
-                    key_to_select_by_default = name
-                    break
+            key_to_select_by_default = next(
+                (
+                    name
+                    for name, path in self.repos_config.items()
+                    if path == default_repo_path_target
+                ),
+                None,
+            )
 
             if not key_to_select_by_default:
 
-                if default_repo_path_target not in self.repos_config:
+                if default_repo_path_target not in self.repos_config.values():
                     self.repos_config[default_repo_path_target] = (
                         default_repo_path_target
                     )
-
                 key_to_select_by_default = default_repo_path_target
 
         except FileNotFoundError:
             if hasattr(self, "update_status"):
                 self.update_status("repo.json not found. Creating default.", "orange")
+            else:
+                print("repo.json not found. Creating default.")
 
-            default_data_to_write = {"FairyRoot": "Fairyvmos/BlankTMing"}
+            default_data_to_write = {
+                "default": "Fairyvmos/BlankTMing",
+                "FairyRoot": "Fairyvmos/BlankTMing",
+            }
             try:
                 with open("repo.json", "w", encoding="utf-8") as f:
                     json.dump(default_data_to_write, f, indent=4)
-
                 self.repos_config = {"FairyRoot": "Fairyvmos/BlankTMing"}
                 key_to_select_by_default = "FairyRoot"
             except Exception as e_write:
+                error_msg = f"Error creating repo.json: {e_write}"
                 if hasattr(self, "update_status"):
-                    self.update_status(f"Error creating repo.json: {e_write}", "red")
-
+                    self.update_status(error_msg, "red")
+                else:
+                    print(error_msg)
                 self.repos_config = {"Fallback_Default": "Fairyvmos/BlankTMing"}
                 key_to_select_by_default = "Fallback_Default"
 
         except json.JSONDecodeError:
+            error_msg = "Error decoding repo.json. Using fallback."
             if hasattr(self, "update_status"):
-                self.update_status("Error decoding repo.json. Using fallback.", "red")
+                self.update_status(error_msg, "red")
+            else:
+                print(error_msg)
             self.repos_config = {"Fallback_JsonError": "Fairyvmos/BlankTMing"}
             key_to_select_by_default = "Fallback_JsonError"
         except Exception as e:
+            error_msg = f"Error loading repos: {e}"
             if hasattr(self, "update_status"):
-                self.update_status(f"Error loading repos: {e}", "red")
+                self.update_status(error_msg, "red")
+            else:
+                print(error_msg)
             self.repos_config = {"Fallback_GeneralError": "Fairyvmos/BlankTMing"}
             key_to_select_by_default = "Fallback_GeneralError"
 
@@ -595,7 +626,8 @@ class App(TkinterDnD.Tk):
         elif self.repos_config:
             self.selected_repo_key.set(list(self.repos_config.keys())[0])
         else:
-            self.selected_repo_key.set("N/A")
+            self.repos_config = {"ErrorCaseRepo": "Fairyvmos/BlankTMing"}
+            self.selected_repo_key.set("ErrorCaseRepo")
 
         if (
             hasattr(self, "repo_dropdown")
@@ -616,45 +648,17 @@ class App(TkinterDnD.Tk):
                 self.repo_dropdown.configure(state="disabled")
 
     def on_repo_select(self, selected_display_name):
-        """Handles repository selection change."""
+        """Handles repository selection change from the dropdown."""
         repo_path = self.repos_config.get(selected_display_name)
         if repo_path:
-            if hasattr(self, "update_status"):
-                self.update_status(f"Repository: {selected_display_name}", "lightblue")
+            self.update_status(f"Repository: {selected_display_name}", "lightblue")
         else:
-            if hasattr(self, "update_status"):
-                self.update_status(
-                    f"Unknown repository: {selected_display_name}", "orange"
-                )
-
-    def _on_toggle_special_mode(self):
-        """Handles the special mode checkbox toggle."""
-        if self.special_mode_var.get():
-            self.repo_dropdown.configure(state="disabled")
-            if hasattr(self, "update_status"):
-                self.update_status(
-                    "Special Mode Activated: Repository dropdown disabled.", "yellow"
-                )
-        else:
-            self.repo_dropdown.configure(state="normal")
-            if hasattr(self, "update_status"):
-                self.update_status(
-                    "Special Mode Deactivated: Repository dropdown enabled.",
-                    "lightblue",
-                )
-
-            if (
-                self.selected_repo_key.get()
-                and self.selected_repo_key.get() in self.repos_config
-            ):
-                self.repo_dropdown.set(self.selected_repo_key.get())
-            elif self.repos_config:
-                self.repo_dropdown.set(list(self.repos_config.keys())[0])
-            else:
-                self.repo_dropdown.set("N/A")
+            self.update_status(
+                f"Unknown repository selected: {selected_display_name}", "orange"
+            )
 
     def _clear_dnd_area(self):
-        """Removes existing widgets from the DND frame."""
+        """Removes existing game info widgets from the DND frame."""
         if self.dnd_game_image_label:
             self.dnd_game_image_label.grid_forget()
             self.dnd_game_image_label.destroy()
@@ -671,8 +675,7 @@ class App(TkinterDnD.Tk):
 
     def _update_dnd_area_display(self, image, description, error_message):
         """Updates the DND frame with game info or an error message.
-        Uses CTkTextbox for description (scrollable if needed).
-        Only adds refresh clickability for actual errors.
+        Uses CTkTextbox for description. Click to refresh for actual errors.
         """
         if not self.dnd_frame.winfo_exists():
             return
@@ -686,10 +689,9 @@ class App(TkinterDnD.Tk):
             frame_width = WINDOW_WIDTH - 80
 
         if error_message is not None:
-            is_actual_error = (
-                "error" in error_message.lower()
-                or "could not find" in error_message.lower()
-                or "failed" in error_message.lower()
+            is_actual_error = any(
+                keyword in error_message.lower()
+                for keyword in ["error", "could not find", "failed"]
             )
 
             display_text = error_message
@@ -709,13 +711,10 @@ class App(TkinterDnD.Tk):
                 wraplength=frame_width - 20,
                 cursor=cursor_type,
             )
-
             if click_binding:
                 self.dnd_placeholder_label.bind("<Button-1>", click_binding)
-
             self.dnd_placeholder_label.drop_target_register(DND_FILES)
             self.dnd_placeholder_label.dnd_bind("<<Drop>>", self.handle_drop)
-
             self.dnd_placeholder_label.grid(
                 row=0, column=0, rowspan=2, sticky="nsew", padx=10, pady=10
             )
@@ -741,11 +740,11 @@ class App(TkinterDnD.Tk):
             )
             self.dnd_game_desc_textbox.insert("1.0", description)
             self.dnd_game_desc_textbox.configure(state="disabled")
-
         else:
             self._show_dnd_placeholder()
 
     def _show_dnd_placeholder(self, text="Drag and drop .lua file here"):
+        """Displays the default placeholder text in the DND area."""
         if not self.dnd_frame.winfo_exists():
             return
         self._clear_dnd_area()
@@ -758,78 +757,55 @@ class App(TkinterDnD.Tk):
         self.dnd_placeholder_label.drop_target_register(DND_FILES)
         self.dnd_placeholder_label.dnd_bind("<<Drop>>", self.handle_drop)
         self.dnd_placeholder_label.configure(cursor="")
-
         self.dnd_placeholder_label.grid(
             row=0, column=0, rowspan=2, sticky="nsew", padx=10, pady=10
         )
 
     def _fetch_game_info_thread(self, game_id):
-        """Fetches game info from Steam widget in a background thread."""
+        """Fetches game info (image, description) from Steam widget in a background thread."""
         widget_url = f"https://store.steampowered.com/widget/{game_id}/"
-        headers = {
-            "Host": "store.steampowered.com",
-            "Sec-Ch-Ua": "Chromium;v=135, Not-A.Brand;v=8",
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": "Windows",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Sec-Fetch-Site": "cross-site",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-User": "?1",
-            "Sec-Fetch-Dest": "iframe",
-            "Sec-Fetch-Storage-Access": "active",
-            "Referer": "https://steamui.com/",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Priority": "u=0, i",
-            "Connection": "keep-alive",
-        }
-        image_url = None
-        description = None
-        error_msg = None
-        ctk_image = None
+        headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.5"}
+        image_url, description, error_msg, ctk_image = None, None, None, None
 
         try:
-            reponse = requests.get(
+            response = requests.get(
                 widget_url, headers=headers, timeout=10, verify=False
             )
-            reponse.raise_for_status()
-            soup = BeautifulSoup(reponse.text, "html.parser")
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
             desc_div = soup.find("div", class_="desc")
 
             if desc_div:
                 img_tag = desc_div.find("img", class_="capsule")
                 if img_tag and img_tag.get("src"):
                     image_url = img_tag["src"]
+
                 link_tag = desc_div.find("a")
                 if link_tag:
-                    desc_text_nodes = link_tag.find_next_siblings(string=True)
-                    description = "".join(
-                        node.strip() for node in desc_text_nodes
-                    ).strip()
-                    if not description:
+
+                    name_span = link_tag.find("span", class_="title")
+                    if name_span:
+                        description = name_span.get_text(strip=True)
+                    else:
                         description = link_tag.get_text(strip=True)
-                elif not description:
+
+                if not description or len(description) < 5:
                     description = desc_div.get_text(separator=" ", strip=True)
                     if img_tag:
-                        img_text_pattern = re.escape(img_tag.get_text(strip=True))
-                        if img_text_pattern:
-                            description = re.sub(
-                                r"\s*" + img_text_pattern + r"\s*", " ", description
-                            ).strip()
+                        img_alt_text = img_tag.get("alt", "")
+                        if img_alt_text:
+                            description = description.replace(img_alt_text, "").strip()
 
                 if not description:
                     description = f"Game ID: {game_id}"
-
             else:
                 error_msg = f"Game info not found for ID: {game_id}"
 
             if image_url:
                 try:
-                    img_reponse = requests.get(image_url, timeout=10, verify=False)
-                    img_reponse.raise_for_status()
-                    pil_image = Image.open(io.BytesIO(img_reponse.content))
+                    img_response = requests.get(image_url, timeout=10, verify=False)
+                    img_response.raise_for_status()
+                    pil_image = Image.open(io.BytesIO(img_response.content))
                     target_width = 184
                     scale = target_width / pil_image.width
                     target_height = int(pil_image.height * scale)
@@ -839,25 +815,25 @@ class App(TkinterDnD.Tk):
                         size=(target_width, target_height),
                     )
                 except Exception as img_e:
-                    print(f"Error downloading/processing image: {img_e}")
+                    print(f"Error downloading/processing image for {game_id}: {img_e}")
                     ctk_image = None
 
         except requests.exceptions.RequestException as e:
-            print(f"Network error fetching game info: {e}")
-            error_msg = "Network error fetching game info."
+            error_msg = f"Network error fetching game info for {game_id}."
+            print(f"{error_msg} Details: {e}")
         except Exception as e:
-            print(f"Error parsing game info: {e}")
-            error_msg = "Error parsing game info."
+            error_msg = f"Error parsing game info for {game_id}."
+            print(f"{error_msg} Details: {e}")
 
         try:
             self.after(
                 0, self._update_dnd_area_display, ctk_image, description, error_msg
             )
         except tk.TclError:
-            print("App closed before game info update could be scheduled.")
+            print("App window closed before game info update could be scheduled.")
 
     def _start_fetch_game_info(self, filepath):
-        """Reads file, gets ID, and starts the fetch thread."""
+        """Reads Lua file, extracts Game ID, and starts fetching game info if ID found."""
         game_id = None
         try:
             if not os.path.isfile(filepath):
@@ -883,10 +859,9 @@ class App(TkinterDnD.Tk):
                     None,
                     f"Loading info for Game ID: {game_id}...",
                 )
-                thread = threading.Thread(
+                threading.Thread(
                     target=self._fetch_game_info_thread, args=(game_id,), daemon=True
-                )
-                thread.start()
+                ).start()
             else:
                 self.current_game_id = None
                 self.after(
@@ -896,7 +871,6 @@ class App(TkinterDnD.Tk):
                     None,
                     "Could not find Game ID in file.",
                 )
-
         except Exception as e:
             self.current_game_id = None
             self.after(
@@ -904,9 +878,8 @@ class App(TkinterDnD.Tk):
             )
 
     def _retry_fetch_game_info(self, event=None):
-        """Handles the click event on the error message to retry fetching."""
+        """Retries fetching game info if a file is currently selected."""
         if self.is_processing:
-            print("Main update process is running, cannot fetch game info now.")
             return
 
         filepath = self.selected_file_path.get()
@@ -927,6 +900,8 @@ class App(TkinterDnD.Tk):
         self._start_fetch_game_info(filepath)
 
     def update_status(self, message, color="white"):
+        """Updates the status label text and color on the GUI thread."""
+
         def _update():
             if hasattr(self, "status_label") and self.status_label.winfo_exists():
                 self.status_message.set(message)
@@ -946,9 +921,10 @@ class App(TkinterDnD.Tk):
         try:
             self.after(0, _update)
         except tk.TclError:
-            print("App closed before status update could be scheduled.")
+            print("App window closed, cannot update status.")
 
     def select_file(self):
+        """Opens a dialog to select a .lua file."""
         if self.is_processing:
             return
         filetypes = [("Lua Script", "*.lua"), ("All Files", "*.*")]
@@ -973,6 +949,7 @@ class App(TkinterDnD.Tk):
                 self._show_dnd_placeholder()
 
     def select_output_folder(self):
+        """Opens a dialog to select the output folder."""
         if self.is_processing:
             return
         initial_dir = self.output_folder_path.get()
@@ -980,6 +957,7 @@ class App(TkinterDnD.Tk):
             initial_dir = os.path.join(os.path.expanduser("~"), "Desktop")
             if not os.path.isdir(initial_dir):
                 initial_dir = os.path.expanduser("~")
+
         folderpath = filedialog.askdirectory(
             title="Select Output Folder", initialdir=initial_dir
         )
@@ -988,13 +966,16 @@ class App(TkinterDnD.Tk):
             self.update_status("Output folder selected", "lightblue")
 
     def handle_drop(self, event):
+        """Handles a file drop event, processing a single .lua file."""
         if self.is_processing:
             return
         filepaths_str = event.data.strip()
-        if filepaths_str.startswith("{") and filepaths_str.endswith("}"):
-            filepath = filepaths_str[1:-1]
-        else:
-            filepath = filepaths_str
+
+        filepath = (
+            filepaths_str[1:-1]
+            if filepaths_str.startswith("{") and filepaths_str.endswith("}")
+            else filepaths_str
+        )
 
         if os.path.isfile(filepath) and filepath.lower().endswith(".lua"):
             self.selected_file_path.set(filepath)
@@ -1024,6 +1005,7 @@ class App(TkinterDnD.Tk):
             self._show_dnd_placeholder()
 
     def join_telegram(self):
+        """Opens the Telegram link in a web browser."""
         try:
             webbrowser.open_new_tab(TELEGRAM_LINK)
             self.update_status("Opening Telegram link...", "lightblue")
@@ -1032,54 +1014,54 @@ class App(TkinterDnD.Tk):
             messagebox.showerror("Error", f"Could not open Telegram link:\n{e}")
 
     def set_processing_state(self, processing):
+        """Enables or disables UI elements based on processing state."""
         self.is_processing = processing
         state = "disabled" if processing else "normal"
+
         widgets_to_toggle = [
-            getattr(self, "select_file_button", None),
-            getattr(self, "browse_button", None),
-            getattr(self, "update_button", None),
-            getattr(self, "repo_dropdown", None),
-            getattr(self, "special_mode_checkbox", None),
+            self.select_file_button,
+            self.browse_button,
+            self.update_button,
+            self.repo_dropdown,
         ]
+
         try:
+            dnd_target = self.dnd_frame
+            placeholder_target = self.dnd_placeholder_label
             if processing:
-                if hasattr(self, "dnd_frame") and self.dnd_frame.winfo_exists():
-                    self.dnd_frame.drop_target_unregister()
-                if (
-                    hasattr(self, "dnd_placeholder_label")
-                    and self.dnd_placeholder_label
-                    and self.dnd_placeholder_label.winfo_exists()
-                ):
-                    self.dnd_placeholder_label.drop_target_unregister()
+                if dnd_target and dnd_target.winfo_exists():
+                    dnd_target.drop_target_unregister()
+                if placeholder_target and placeholder_target.winfo_exists():
+                    placeholder_target.drop_target_unregister()
             else:
-                if hasattr(self, "dnd_frame") and self.dnd_frame.winfo_exists():
-                    self.dnd_frame.drop_target_register(DND_FILES)
-                if (
-                    hasattr(self, "dnd_placeholder_label")
-                    and self.dnd_placeholder_label
-                    and self.dnd_placeholder_label.winfo_exists()
-                ):
-                    self.dnd_placeholder_label.drop_target_register(DND_FILES)
+                if dnd_target and dnd_target.winfo_exists():
+                    dnd_target.drop_target_register(DND_FILES)
+                if placeholder_target and placeholder_target.winfo_exists():
+                    placeholder_target.drop_target_register(DND_FILES)
         except tk.TclError:
-            print("Warning: Error toggling drop target registration.")
+            print("Warning: Error toggling DND registration, window might be closing.")
 
         for widget in widgets_to_toggle:
             if widget and widget.winfo_exists():
+                if widget == self.repo_dropdown:
 
-                if (
-                    widget == self.repo_dropdown
-                    and state == "normal"
-                    and self.special_mode_var.get()
-                ):
-                    widget.configure(state="disabled")
+                    widget.configure(
+                        state=(
+                            "disabled"
+                            if processing or not self.repos_config
+                            else "normal"
+                        )
+                    )
                 else:
                     widget.configure(state=state)
 
-        update_button = getattr(self, "update_button", None)
-        if update_button and update_button.winfo_exists():
-            update_button.configure(text="Processing..." if processing else "Update")
+        if self.update_button and self.update_button.winfo_exists():
+            self.update_button.configure(
+                text="Processing..." if processing else "Update"
+            )
 
     def start_update_process(self):
+        """Initiates the manifest update process in a new thread."""
         if self.is_processing:
             return
 
@@ -1105,7 +1087,9 @@ class App(TkinterDnD.Tk):
                 self.output_folder_path.set(output_dir)
                 self.update_status(f"Using default output: {output_dir}", "lightblue")
             else:
-                messagebox.showerror("Input Missing", "Please select an output folder.")
+                messagebox.showerror(
+                    "Output Missing", "Please select an output folder."
+                )
                 return
         try:
             os.makedirs(output_dir, exist_ok=True)
@@ -1118,23 +1102,26 @@ class App(TkinterDnD.Tk):
         self.set_processing_state(True)
         self.update_status("Starting update process...", "lightblue")
 
-        thread = threading.Thread(
+        threading.Thread(
             target=self._update_thread_target,
             args=(original_lua_path, output_dir),
             daemon=True,
-        )
-        thread.start()
+        ).start()
 
     def _update_thread_target(self, original_lua_path, output_base_dir):
-        """The actual update logic run in the background thread."""
+        """Core logic for updating manifests, run in a background thread."""
         game_id = None
+
         temp_base_dir = os.path.join(
-            os.getenv("TEMP", "/tmp"), f"luaandstmanifest_updater_{os.getpid()}"
+            os.getenv("TEMP", "/tmp"),
+            f"lua_manifest_updater_{os.getpid()}_{int(time.time())}",
         )
-        temp_extract_dir = None
-        downloaded_zip_path = None
-        temp_updated_lua_path = None
-        final_zip_path = None
+        temp_extract_dir, downloaded_zip_path, temp_updated_lua_path, final_zip_path = (
+            None,
+            None,
+            None,
+            None,
+        )
         extracted_manifest_paths = []
         success = False
         final_save_path = ""
@@ -1146,7 +1133,7 @@ class App(TkinterDnD.Tk):
             try:
                 if not os.path.isfile(original_lua_path):
                     self.update_status(
-                        f"Error: Input file disappeared during processing: {os.path.basename(original_lua_path)}",
+                        f"Error: Input file disappeared: {os.path.basename(original_lua_path)}",
                         "red",
                     )
                     return
@@ -1160,9 +1147,7 @@ class App(TkinterDnD.Tk):
                     return
                 self.update_status(f"Found Game ID: {game_id}", "lightblue")
             except Exception as e:
-                self.update_status(
-                    f"Error reading input Lua file during update: {e}", "red"
-                )
+                self.update_status(f"Error reading input Lua file: {e}", "red")
                 return
 
             temp_extract_dir = os.path.join(temp_base_dir, f"extracted_{game_id}")
@@ -1178,97 +1163,35 @@ class App(TkinterDnD.Tk):
             os.makedirs(temp_base_dir, exist_ok=True)
             os.makedirs(temp_extract_dir, exist_ok=True)
 
-            if self.special_mode_var.get():
-                depot_manifest_pairs = _get_depot_manifest_ids_from_steamui(
-                    game_id, self.update_status
-                )
-                if not depot_manifest_pairs:
-                    self.update_status(
-                        f"Special Mode: No manifest data found for Game ID {game_id}. Cannot proceed.",
-                        "red",
-                    )
-                    return
+            selected_repo_display_name = self.selected_repo_key.get()
+            repo_path_to_use = self.repos_config.get(
+                selected_repo_display_name, "Fairyvmos/BlankTMing"
+            )
 
-                extracted_manifest_paths = []
-                total_manifests_to_download = len(depot_manifest_pairs)
-                download_count = 0
+            url = f"https://github.com/{repo_path_to_use}/archive/refs/heads/{game_id}.zip"
+            self.update_status(
+                f"Using repo: {repo_path_to_use} for branch {game_id}", "lightblue"
+            )
 
-                for idx, (depotid, manifestgid) in enumerate(depot_manifest_pairs):
-                    manifest_filename = f"{depotid}_{manifestgid}.manifest"
-                    self.update_status(
-                        f"Special Mode: Downloading manifest {idx+1}/{total_manifests_to_download}: {manifest_filename}...",
-                        "yellow",
-                    )
+            if not download_file(url, downloaded_zip_path, self.update_status):
 
-                    special_mode_url = f"https://raw.githubusercontent.com/qwe213312/k25FCdfEOoEJ42S6/main/{manifest_filename}"
-                    downloaded_manifest_path = os.path.join(
-                        temp_extract_dir, manifest_filename
-                    )
-
-                    if download_file(
-                        special_mode_url, downloaded_manifest_path, self.update_status
-                    ):
-                        if os.path.exists(downloaded_manifest_path):
-                            extracted_manifest_paths.append(downloaded_manifest_path)
-                            download_count += 1
-                        else:
-                            self.update_status(
-                                f"Special Mode: Downloaded {manifest_filename} but file not found.",
-                                "red",
-                            )
-                    else:
-                        self.update_status(
-                            f"Special Mode: Failed to download {manifest_filename}.",
-                            "orange",
-                        )
-
-                if download_count == 0 and total_manifests_to_download > 0:
-                    self.update_status(
-                        f"Special Mode: Failed to download any manifests for Game ID {game_id}.",
-                        "red",
-                    )
-                    return
-                elif download_count < total_manifests_to_download:
-                    self.update_status(
-                        f"Special Mode: Successfully downloaded {download_count}/{total_manifests_to_download} manifests.",
-                        "yellow",
-                    )
-                else:
-                    self.update_status(
-                        f"Special Mode: Successfully downloaded all {download_count} manifests.",
-                        "lightgreen",
-                    )
-
-            else:
-                selected_repo_display_name = self.selected_repo_key.get()
-                repo_path_to_use = self.repos_config.get(
-                    selected_repo_display_name, "Fairyvmos/BlankTMing"
-                )
-                url = f"https://github.com/{repo_path_to_use}/archive/refs/heads/{game_id}.zip"
                 self.update_status(
-                    f"Using repo: {repo_path_to_use} for {game_id}.zip", "lightblue"
+                    f"Download from GitHub ({repo_path_to_use}, branch {game_id}) failed.",
+                    "red",
                 )
 
-                if not download_file(url, downloaded_zip_path, self.update_status):
-                    self.update_status(
-                        f"Download from {repo_path_to_use} failed, trying proxy for {game_id}.zip...",
-                        "orange",
-                    )
-                    proxy_url = url
-                    if not download_file(
-                        proxy_url, downloaded_zip_path, self.update_status
-                    ):
-                        return
+                return
 
-                extracted_manifest_paths = extract_files_gui(
-                    downloaded_zip_path, temp_extract_dir, self.update_status
-                )
-                if extracted_manifest_paths is None:
-                    return
+            extracted_manifest_paths = extract_files_gui(
+                downloaded_zip_path, temp_extract_dir, self.update_status
+            )
+            if extracted_manifest_paths is None:
+                return
 
             if not extracted_manifest_paths:
-                self.update_status("No manifest files to process.", "red")
-                return
+                self.update_status(
+                    "No manifest files found in the archive to process.", "orange"
+                )
 
             temp_updated_lua_path = update_lua_file_gui(
                 original_lua_path,
@@ -1292,59 +1215,60 @@ class App(TkinterDnD.Tk):
             success = True
 
         except Exception as e:
-            self.update_status(
-                f"An unexpected error occurred during update: {e}", "red"
-            )
-            success = False
+            self.update_status(f"An unexpected error occurred: {e}", "red")
+            import traceback
 
+            traceback.print_exc()
+            success = False
         finally:
             self.update_status("Cleaning up temporary files...", "gray")
-            time.sleep(0.5)
+            time.sleep(0.1)
             if temp_base_dir and os.path.exists(temp_base_dir):
                 delete_item(temp_base_dir)
 
-            if success:
-                final_msg = (
-                    f"Process completed successfully!\nSaved in: {final_save_path}"
-                )
-                final_color = "lime"
-            else:
-                current_status = self.status_message.get()
-                if "Error" not in current_status and "failed" not in current_status:
-                    final_msg = "Update process failed."
-                    final_color = "red"
-                else:
-                    final_msg = current_status
-                    final_color = "red"
+            final_msg = (
+                f"Process completed successfully!\nSaved in: {final_save_path}"
+                if success
+                else "Update process failed. Check messages for errors."
+            )
+            final_color = "lime" if success else "red"
+
+            if not success and (
+                "Error" in self.status_message.get()
+                or "failed" in self.status_message.get()
+            ):
+                final_msg = self.status_message.get()
 
             try:
                 self.after(0, lambda: self.update_status(final_msg, final_color))
                 self.current_game_id = None
                 self.after(100, lambda: self.set_processing_state(False))
             except tk.TclError:
-                print(
-                    "App closed before final status update or state reset could be scheduled."
-                )
+                print("App window closed, final UI updates skipped.")
 
 
 if __name__ == "__main__":
     try:
+
         root_test = TkinterDnD.Tk()
-        label_test = tk.Label(root_test, text="Test")
-        label_test.pack()
+        root_test.withdraw()
+        label_test = tk.Label(root_test, text="TestDND")
         label_test.drop_target_register(DND_FILES)
-        label_test.dnd_bind("<<Drop>>", lambda e: None)
+
         root_test.destroy()
     except Exception as e:
-        print(f"Error initializing TkinterDnD: {e}")
+        print(f"Critical Error: Failed to initialize TkinterDnD: {e}")
         print(
-            "Please ensure 'python-tkdnd2' is installed correctly for your environment."
+            "This usually means 'python-tkdnd2' is not installed correctly or its dependencies are missing."
         )
+
         root_err = tk.Tk()
         root_err.withdraw()
         messagebox.showerror(
             "Dependency Error",
-            "Failed to load Drag and Drop library (TkinterDnD).\nPlease ensure 'python-tkdnd2' is installed correctly.\nThe application will now close.",
+            "Failed to load Drag and Drop library (TkinterDnD).\n"
+            "Please ensure 'python-tkdnd2' is installed correctly for your Python environment.\n"
+            "The application will now close.",
         )
         root_err.destroy()
         sys.exit(1)
